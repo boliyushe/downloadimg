@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>批量图片下载工具</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <style>
+        body { font-family: Arial, sans-serif; background: #f7f7f7; }
+        .container { max-width: 480px; margin: 40px auto; background: #fff; border-radius: 8px; box-shadow: 0 2px 8px #0001; padding: 32px 24px; }
+        h2 { text-align: center; }
+        .upload-area { border: 2px dashed #bbb; border-radius: 8px; padding: 32px 0; text-align: center; color: #888; margin-bottom: 20px; background: #fafafa; cursor: pointer; }
+        .upload-area.dragover { border-color: #409eff; color: #409eff; background: #f0faff; }
+        .columns-list { margin-bottom: 16px; }
+        .col-row { display: flex; align-items: center; margin-bottom: 8px; }
+        .col-row input { flex: 1; padding: 6px 8px; font-size: 15px; border: 1px solid #ccc; border-radius: 4px; }
+        .col-row button { margin-left: 8px; padding: 4px 10px; font-size: 16px; border: none; background: #f56c6c; color: #fff; border-radius: 4px; cursor: pointer; }
+        .col-row button.add { background: #67c23a; }
+        .progress-bar { width: 100%; height: 18px; background: #eee; border-radius: 9px; overflow: hidden; margin-bottom: 10px; }
+        .progress-inner { height: 100%; background: #409eff; width: 0; transition: width 0.3s; }
+        .result { margin-top: 18px; text-align: center; }
+        .tip { color: #888; font-size: 14px; margin-bottom: 12px; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h2>批量图片下载工具</h2>
+    <div class="tip">
+        1. 拖拽或点击上传Excel文件（.xlsx）<br>
+        2. 输入要下载的列名（可多个，点击加号添加）<br>
+        3. 每列的图片会下载到单独文件夹，文件名保持原样<br>
+        4. 下载完成后可打包下载zip
+    </div>
+    <div class="upload-area" id="upload-area">拖拽或点击上传Excel文件</div>
+    <input type="file" id="file-input" accept=".xlsx" style="display:none;">
+    <div class="columns-list" id="columns-list">
+        <div class="col-row"><input type="text" placeholder="请输入列名，如 图片链接" class="col-input"><button class="add">＋</button></div>
+    </div>
+    <button id="start-btn" style="width:100%;padding:10px 0;font-size:17px;background:#409eff;color:#fff;border:none;border-radius:5px;">开始下载</button>
+    <div class="progress-bar" style="display:none;"><div class="progress-inner"></div></div>
+    <div class="result" id="result"></div>
+</div>
+<script>
+const API_BASE = '';
+let selectedFile = null;
+const uploadArea = document.getElementById('upload-area');
+const fileInput = document.getElementById('file-input');
+const columnsList = document.getElementById('columns-list');
+const startBtn = document.getElementById('start-btn');
+const progressBar = document.querySelector('.progress-bar');
+const progressInner = document.querySelector('.progress-inner');
+const resultDiv = document.getElementById('result');
+
+// 拖拽上传
+uploadArea.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', e => {
+    if (e.target.files.length) {
+        selectedFile = e.target.files[0];
+        uploadArea.textContent = '已选择文件：' + selectedFile.name;
+    }
+});
+uploadArea.addEventListener('dragover', e => { e.preventDefault(); uploadArea.classList.add('dragover'); });
+uploadArea.addEventListener('dragleave', e => { uploadArea.classList.remove('dragover'); });
+uploadArea.addEventListener('drop', e => {
+    e.preventDefault(); uploadArea.classList.remove('dragover');
+    if (e.dataTransfer.files.length) {
+        selectedFile = e.dataTransfer.files[0];
+        uploadArea.textContent = '已选择文件：' + selectedFile.name;
+    }
+});
+
+// 动态添加/删除列名输入框
+columnsList.addEventListener('click', e => {
+    if (e.target.classList.contains('add')) {
+        const row = document.createElement('div');
+        row.className = 'col-row';
+        row.innerHTML = '<input type="text" placeholder="请输入列名，如 图片链接" class="col-input"><button>－</button>';
+        columnsList.appendChild(row);
+    } else if (e.target.textContent === '－') {
+        e.target.parentElement.remove();
+    }
+});
+
+// 开始下载
+startBtn.onclick = async function() {
+    resultDiv.textContent = '';
+    if (!selectedFile) { alert('请先上传Excel文件'); return; }
+    const colInputs = Array.from(document.querySelectorAll('.col-input'));
+    const columns = colInputs.map(i => i.value.trim()).filter(Boolean);
+    if (!columns.length) { alert('请至少输入一个列名'); return; }
+    startBtn.disabled = true;
+    progressBar.style.display = 'block';
+    progressInner.style.width = '0%';
+    resultDiv.textContent = '正在上传并启动任务...';
+    // 构造FormData
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+    columns.forEach(col => formData.append('columns', col));
+    // 发起上传
+    let task_id = '';
+    try {
+        const resp = await fetch(`${API_BASE}/upload`, { method: 'POST', body: formData });
+        if (!resp.ok) throw new Error('上传失败');
+        const data = await resp.json();
+        task_id = data.task_id;
+    } catch (e) {
+        resultDiv.textContent = '上传失败：' + e.message;
+        startBtn.disabled = false;
+        progressBar.style.display = 'none';
+        return;
+    }
+    // 轮询进度
+    let timer = setInterval(async () => {
+        try {
+            const resp = await fetch(`${API_BASE}/progress/${task_id}`);
+            if (!resp.ok) throw new Error('进度获取失败');
+            const data = await resp.json();
+            progressInner.style.width = (data.progress || 0) + '%';
+            resultDiv.innerHTML = `进度：${data.progress || 0}%<br>状态：${data.status}`;
+            if (data.status === 'done') {
+                clearInterval(timer);
+                progressInner.style.width = '100%';
+                resultDiv.innerHTML = `<a href="${API_BASE}/download/${task_id}" style="color:#409eff;font-size:18px;">下载结果zip</a>`;
+                startBtn.disabled = false;
+            } else if (data.status === 'error') {
+                clearInterval(timer);
+                resultDiv.innerHTML = '任务失败：' + (data.error || '未知错误');
+                startBtn.disabled = false;
+            }
+        } catch (e) {
+            clearInterval(timer);
+            resultDiv.textContent = '进度获取失败：' + e.message;
+            startBtn.disabled = false;
+        }
+    }, 1500);
+};
+</script>
+</body>
+</html> 
